@@ -3,14 +3,14 @@ import { useApp } from "@/Context/AppContext";
 import { router, useLocalSearchParams } from "expo-router";
 import React, { useState } from "react";
 import {
-  FlatList,
-  Image,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
+    FlatList,
+    Image,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    View,
 } from "react-native";
 
 import { Doctor } from "../../data/doctor";

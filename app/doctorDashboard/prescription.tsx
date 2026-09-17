@@ -1,10 +1,8 @@
-import { useLocalSearchParams, useRouter } from "expo-router";
-import React, { useCallback, useEffect, useState } from "react";
+import axios from "axios";
+import { useRouter } from "expo-router";
+import React, { useState } from "react";
 import {
-  ActivityIndicator,
   Alert,
-  Platform,
-  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -12,385 +10,520 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import {
-  Medicine,
-  Prescription,
-  createPrescription,
-  getPrescriptions,
-} from "../../services/member2.api";
 
-// Cross-platform alert helper that works on Web and Mobile
-const showAlert = (title: string, message: string) => {
-  if (Platform.OS === "web") {
-    window.alert(`${title}: ${message}`);
-  } else {
-    Alert.alert(title, message);
-  }
-};
+import { useApp } from "../../Context/AppContext";
 
-export default function DoctorPrescriptionScreen() {
+const API_URL = "http://localhost:5000";
+
+const PrescriptionScreen = () => {
   const router = useRouter();
-  const params = useLocalSearchParams();
 
-  const initialPatient = (params.patientName as string) || "";
-  const initialAppointmentId = (params.appointmentId as string) || "";
+  const {
+    appointments,
+    addPrescription,
+    addMedicalHistory,
+  } = useApp();
 
-  const [prescriptions, setPrescriptions] = useState<Prescription[]>([]);
-  const [loadingList, setLoadingList] = useState<boolean>(true);
-  const [refreshing, setRefreshing] = useState<boolean>(false);
+  const [medicineName, setMedicineName] = useState("");
+  const [dosage, setDosage] = useState("");
+  const [instructions, setInstructions] = useState("");
+  const [notes, setNotes] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  const [patientName, setPatientName] = useState<string>(initialPatient);
-  const [diagnosis, setDiagnosis] = useState<string>("");
-  const [notes, setNotes] = useState<string>("");
-  const [submitting, setSubmitting] = useState<boolean>(false);
-
-  const [medicines, setMedicines] = useState<Medicine[]>([
-    { name: "", dosage: "", timing: "" },
-  ]);
-
-  const loadPrescriptions = useCallback(async () => {
-    try {
-      const data = await getPrescriptions();
-      setPrescriptions(data);
-    } catch (err: any) {
-      console.error("Failed to load prescriptions:", err);
-    } finally {
-      setLoadingList(false);
-      setRefreshing(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadPrescriptions();
-  }, [loadPrescriptions]);
-
-  const onRefresh = () => {
-    setRefreshing(true);
-    loadPrescriptions();
+  /*
+   * If there is an appointment, use it.
+   * If the screen is opened directly for testing,
+   * use a temporary fallback appointment.
+   */
+  const appointment = appointments?.[0] || {
+    id: "apt-test",
+    patientId: "P-101",
+    patientName: "Test Patient",
+    doctorId: "d1",
+    doctorName: "Dr. Farhana Khan",
   };
 
-  const handleAddMedicine = () => {
-    setMedicines([...medicines, { name: "", dosage: "", timing: "" }]);
-  };
+  const handleCreatePrescription = async () => {
+    // ---------------- VALIDATION ----------------
 
-  const handleRemoveMedicine = (index: number) => {
-    if (medicines.length === 1) {
-      showAlert("Notice", "Prescription must contain at least one medicine entry.");
-      return;
-    }
-    setMedicines(medicines.filter((_, i) => i !== index));
-  };
-
-  const handleMedicineChange = (
-    index: number,
-    field: keyof Medicine,
-    value: string
-  ) => {
-    const updated = [...medicines];
-    updated[index][field] = value;
-    setMedicines(updated);
-  };
-
-  const handleSubmit = async () => {
-    console.log("Issue Prescription button clicked!");
-
-    if (!patientName.trim()) {
-      showAlert("Validation Error", "Please enter a patient name.");
-      return;
-    }
-    if (!diagnosis.trim()) {
-      showAlert("Validation Error", "Please enter the diagnosis.");
+    if (!medicineName.trim()) {
+      Alert.alert("Required", "Please enter medicine name.");
       return;
     }
 
-    const validMedicines = medicines.filter((m) => m.name && m.name.trim().length > 0);
-    if (validMedicines.length === 0) {
-      showAlert("Validation Error", "Please enter at least one medicine name.");
+    if (!dosage.trim()) {
+      Alert.alert("Required", "Please enter dosage.");
       return;
     }
+
+    setLoading(true);
 
     try {
-      setSubmitting(true);
-      const payload = {
-        appointmentId: initialAppointmentId || undefined,
-        patientName: patientName.trim(),
-        diagnosis: diagnosis.trim(),
-        medicines: validMedicines,
+      const today = new Date().toISOString().split("T")[0];
+
+      // ---------------- PRESCRIPTION OBJECT ----------------
+
+      const newPrescription = {
+        id: `prescription-${Date.now()}`,
+
+        appointmentId:
+          appointment?.id || null,
+
+        patientId:
+          appointment?.patientId ||
+          appointment?.patient_id ||
+          "P-101",
+
+        patientName:
+          appointment?.patientName ||
+          appointment?.patient_name ||
+          "Test Patient",
+
+        doctorId:
+          appointment?.doctorId ||
+          appointment?.doctor_id ||
+          "d1",
+
+        doctorName:
+          appointment?.doctorName ||
+          appointment?.doctor_name ||
+          "Dr. Farhana Khan",
+
+        medicines: [
+          {
+            name: medicineName.trim(),
+            dosage: dosage.trim(),
+          },
+        ],
+
+        instructions: instructions.trim(),
+
         notes: notes.trim(),
+
+        diagnosis:
+          notes.trim() || "General consultation",
+
+        date: today,
+
+        createdAt: new Date().toISOString(),
       };
 
-      console.log("Submitting payload:", payload);
+      // ==================================================
+      // 1. SAVE PRESCRIPTION TO NEON POSTGRESQL
+      // ==================================================
 
-      const newPrescription = await createPrescription(payload);
-      console.log("Prescription created successfully:", newPrescription);
+      const response = await axios.post(
+        `${API_URL}/prescriptions`,
+        {
+          appointmentId:
+            newPrescription.appointmentId,
 
-      showAlert("Success", "Prescription has been created successfully!");
-      
-      // Update UI list
-      setPrescriptions((prev) => [newPrescription, ...prev]);
+          doctorId:
+            newPrescription.doctorId,
 
-      // Reset form
-      setPatientName("");
-      setDiagnosis("");
+          doctorName:
+            newPrescription.doctorName,
+
+          patientId:
+            newPrescription.patientId,
+
+          patientName:
+            newPrescription.patientName,
+
+          diagnosis:
+            newPrescription.diagnosis,
+
+          medicines:
+            newPrescription.medicines,
+
+          notes:
+            newPrescription.notes,
+
+          instructions:
+            newPrescription.instructions,
+
+          date:
+            newPrescription.date,
+        }
+      );
+
+      console.log(
+        "Prescription saved:",
+        response.data
+      );
+
+      // Backend normally returns:
+      // { message: "...", prescription: {...} }
+
+      const savedPrescription =
+        response.data?.prescription ||
+        response.data;
+
+      // ==================================================
+      // 2. UPDATE LOCAL PRESCRIPTION CONTEXT
+      // ==================================================
+
+      addPrescription({
+        ...newPrescription,
+        ...savedPrescription,
+
+        appointmentId:
+          savedPrescription?.appointment_id ||
+          newPrescription.appointmentId,
+
+        patientId:
+          savedPrescription?.patient_id ||
+          newPrescription.patientId,
+
+        patientName:
+          savedPrescription?.patient_name ||
+          newPrescription.patientName,
+
+        doctorId:
+          savedPrescription?.doctor_id ||
+          newPrescription.doctorId,
+
+        doctorName:
+          savedPrescription?.doctor_name ||
+          newPrescription.doctorName,
+
+        instructions:
+          savedPrescription?.instructions ||
+          newPrescription.instructions,
+      });
+
+      // ==================================================
+      // 3. UPDATE LOCAL MEDICAL HISTORY CONTEXT
+      // ==================================================
+
+      addMedicalHistory({
+        id:
+          savedPrescription?.id ||
+          newPrescription.id,
+
+        appointmentId:
+          savedPrescription?.appointment_id ||
+          newPrescription.appointmentId,
+
+        patientId:
+          savedPrescription?.patient_id ||
+          newPrescription.patientId,
+
+        patientName:
+          savedPrescription?.patient_name ||
+          newPrescription.patientName,
+
+        doctorId:
+          savedPrescription?.doctor_id ||
+          newPrescription.doctorId,
+
+        doctorName:
+          savedPrescription?.doctor_name ||
+          newPrescription.doctorName,
+
+        diagnosis:
+          savedPrescription?.diagnosis ||
+          newPrescription.diagnosis,
+
+        medicines:
+          savedPrescription?.medicines ||
+          newPrescription.medicines,
+
+        prescription:
+          `${medicineName.trim()} - ${dosage.trim()}`,
+
+        instructions:
+          savedPrescription?.instructions ||
+          newPrescription.instructions,
+
+        notes:
+          savedPrescription?.notes ||
+          newPrescription.notes,
+
+        visitDate:
+          savedPrescription?.date ||
+          newPrescription.date,
+
+        date:
+          savedPrescription?.date ||
+          newPrescription.date,
+
+        createdAt:
+          savedPrescription?.created_at ||
+          newPrescription.createdAt,
+      });
+
+      // ==================================================
+      // 4. SUCCESS MESSAGE
+      // ==================================================
+
+      Alert.alert(
+        "Success",
+        "Prescription created successfully and Medical History updated.",
+        [
+          {
+            text: "OK",
+            onPress: () => {
+              router.replace("/doctor");
+            },
+          },
+        ]
+      );
+
+      // Clear form
+      setMedicineName("");
+      setDosage("");
+      setInstructions("");
       setNotes("");
-      setMedicines([{ name: "", dosage: "", timing: "" }]);
-    } catch (err: any) {
-      console.error("Prescription create error:", err);
-      const msg = err.response?.data?.error || err.message || "Could not save prescription.";
-      showAlert("Submission Error", msg);
+    } catch (error: any) {
+      console.error(
+        "Prescription creation error:",
+        error?.response?.data || error
+      );
+
+      const errorMessage =
+        error?.response?.data?.error ||
+        "Failed to create prescription. Please try again.";
+
+      Alert.alert(
+        "Error",
+        errorMessage
+      );
     } finally {
-      setSubmitting(false);
+      setLoading(false);
     }
   };
 
   return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={styles.content}
-      refreshControl={
-        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-      }
-    >
-      <View style={styles.headerRow}>
+    <View style={styles.container}>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+      >
+        <Text style={styles.title}>
+          Create Prescription
+        </Text>
+
+        {/* ================= PATIENT ================= */}
+
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>
+            Patient Information
+          </Text>
+
+          <Text style={styles.label}>
+            Patient Name
+          </Text>
+
+          <Text style={styles.infoText}>
+            {appointment?.patientName ||
+              appointment?.patient_name ||
+              "Test Patient"}
+          </Text>
+
+          <Text style={styles.label}>
+            Patient ID
+          </Text>
+
+          <Text style={styles.infoText}>
+            {appointment?.patientId ||
+              appointment?.patient_id ||
+              "P-101"}
+          </Text>
+        </View>
+
+        {/* ================= DOCTOR ================= */}
+
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>
+            Doctor Information
+          </Text>
+
+          <Text style={styles.label}>
+            Doctor Name
+          </Text>
+
+          <Text style={styles.infoText}>
+            {appointment?.doctorName ||
+              appointment?.doctor_name ||
+              "Dr. Farhana Khan"}
+          </Text>
+        </View>
+
+        {/* ================= FORM ================= */}
+
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>
+            Prescription Details
+          </Text>
+
+          <Text style={styles.label}>
+            Medicine Name *
+          </Text>
+
+          <TextInput
+            style={styles.input}
+            placeholder="Enter medicine name"
+            value={medicineName}
+            onChangeText={setMedicineName}
+            editable={!loading}
+          />
+
+          <Text style={styles.label}>
+            Dosage *
+          </Text>
+
+          <TextInput
+            style={styles.input}
+            placeholder="Example: 1 tablet twice daily"
+            value={dosage}
+            onChangeText={setDosage}
+            editable={!loading}
+          />
+
+          <Text style={styles.label}>
+            Instructions
+          </Text>
+
+          <TextInput
+            style={[
+              styles.input,
+              styles.textArea,
+            ]}
+            placeholder="Example: Take after meals"
+            value={instructions}
+            onChangeText={setInstructions}
+            multiline
+            numberOfLines={4}
+            editable={!loading}
+          />
+
+          <Text style={styles.label}>
+            Diagnosis / Notes
+          </Text>
+
+          <TextInput
+            style={[
+              styles.input,
+              styles.textArea,
+            ]}
+            placeholder="Enter diagnosis or medical notes"
+            value={notes}
+            onChangeText={setNotes}
+            multiline
+            numberOfLines={4}
+            editable={!loading}
+          />
+        </View>
+
+        {/* ================= BUTTON ================= */}
+
         <TouchableOpacity
-          onPress={() => router.back()}
-          style={styles.backButton}
+          style={[
+            styles.button,
+            loading && styles.buttonDisabled,
+          ]}
+          onPress={handleCreatePrescription}
+          disabled={loading}
         >
-          <Text style={styles.backButtonText}>← Dashboard</Text>
+          <Text style={styles.buttonText}>
+            {loading
+              ? "Saving..."
+              : "Create Prescription"}
+          </Text>
         </TouchableOpacity>
-        <Text style={styles.title}>Prescriptions</Text>
-      </View>
-
-      <View style={styles.card}>
-        <Text style={styles.formTitle}>New Prescription</Text>
-
-        <Text style={styles.label}>Patient Name *</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="e.g. Tanvir Ahmed"
-          value={patientName}
-          onChangeText={setPatientName}
-        />
-
-        <Text style={styles.label}>Diagnosis *</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="e.g. Acute Bronchitis"
-          value={diagnosis}
-          onChangeText={setDiagnosis}
-        />
-
-        <View style={styles.medicineSectionHeader}>
-          <Text style={styles.label}>Medications *</Text>
-          <TouchableOpacity style={styles.addMedBtn} onPress={handleAddMedicine}>
-            <Text style={styles.addMedBtnText}>+ Add Medicine</Text>
-          </TouchableOpacity>
-        </View>
-
-        {medicines.map((med, index) => (
-          <View key={index} style={styles.medRowBox}>
-            <View style={styles.medRowHeader}>
-              <Text style={styles.medIndexText}>Medicine #{index + 1}</Text>
-              {medicines.length > 1 && (
-                <TouchableOpacity onPress={() => handleRemoveMedicine(index)}>
-                  <Text style={styles.removeText}>Remove</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-
-            <TextInput
-              style={styles.input}
-              placeholder="Medicine name (e.g. Napa 500mg)"
-              value={med.name}
-              onChangeText={(text) => handleMedicineChange(index, "name", text)}
-            />
-
-            <View style={styles.inputTwoCol}>
-              <TextInput
-                style={[styles.input, { flex: 1 }]}
-                placeholder="Dosage (e.g. 1 Tablet)"
-                value={med.dosage}
-                onChangeText={(text) => handleMedicineChange(index, "dosage", text)}
-              />
-              <TextInput
-                style={[styles.input, { flex: 1 }]}
-                placeholder="Timing (e.g. After meal)"
-                value={med.timing}
-                onChangeText={(text) => handleMedicineChange(index, "timing", text)}
-              />
-            </View>
-          </View>
-        ))}
-
-        <Text style={styles.label}>Doctor Instructions & Advice</Text>
-        <TextInput
-          style={[styles.input, styles.multilineInput]}
-          placeholder="e.g. Drink warm water, rest 3 days."
-          value={notes}
-          onChangeText={setNotes}
-          multiline
-          numberOfLines={3}
-        />
-
-        <TouchableOpacity
-          style={[styles.submitButton, submitting && styles.btnDisabled]}
-          onPress={handleSubmit}
-          disabled={submitting}
-        >
-          {submitting ? (
-            <ActivityIndicator color="#ffffff" />
-          ) : (
-            <Text style={styles.submitButtonText}>Issue Prescription</Text>
-          )}
-        </TouchableOpacity>
-      </View>
-
-      <Text style={styles.sectionHeader}>Issued Prescriptions</Text>
-
-      {loadingList ? (
-        <View style={styles.centerBox}>
-          <ActivityIndicator size="small" color="#2563eb" />
-          <Text style={styles.stateText}>Loading prescription records...</Text>
-        </View>
-      ) : prescriptions.length === 0 ? (
-        <View style={styles.emptyBox}>
-          <Text style={styles.emptyText}>No prescriptions issued yet.</Text>
-        </View>
-      ) : (
-        prescriptions.map((p) => (
-          <View key={p.id} style={styles.historyCard}>
-            <View style={styles.cardHeader}>
-              <Text style={styles.patientName}>{p.patient_name || p.patientName}</Text>
-              <Text style={styles.dateText}>📅 {p.date}</Text>
-            </View>
-
-            <Text style={styles.diagnosisText}>
-              <Text style={styles.bold}>Diagnosis: </Text>
-              {p.diagnosis}
-            </Text>
-
-            <View style={styles.medChipsContainer}>
-              {(Array.isArray(p.medicines)
-                ? p.medicines
-                : typeof p.medicines === "string"
-                ? JSON.parse(p.medicines)
-                : []
-              ).map((m: Medicine, idx: number) => (
-                <View key={idx} style={styles.medChip}>
-                  <Text style={styles.medChipName}>{m.name}</Text>
-                  {(m.dosage || m.timing) && (
-                    <Text style={styles.medChipDetails}>
-                      {m.dosage} • {m.timing}
-                    </Text>
-                  )}
-                </View>
-              ))}
-            </View>
-
-            {p.notes ? (
-              <Text style={styles.notesText}>
-                <Text style={styles.bold}>Notes: </Text>
-                {p.notes}
-              </Text>
-            ) : null}
-          </View>
-        ))
-      )}
-    </ScrollView>
+      </ScrollView>
+    </View>
   );
-}
+};
+
+export default PrescriptionScreen;
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#f8fafc" },
-  content: { padding: 16, paddingBottom: 40, maxWidth: 650, alignSelf: "center", width: "100%" },
-  headerRow: { flexDirection: "row", alignItems: "center", marginBottom: 16 },
-  backButton: {
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    backgroundColor: "#e2e8f0",
-    borderRadius: 8,
-    marginRight: 12,
+  container: {
+    flex: 1,
+    backgroundColor: "#F5F7FB",
   },
-  backButtonText: { fontSize: 13, fontWeight: "600", color: "#334155" },
-  title: { fontSize: 22, fontWeight: "700", color: "#0f172a" },
+
+  scrollContent: {
+    padding: 20,
+    paddingBottom: 40,
+  },
+
+  title: {
+    fontSize: 28,
+    fontWeight: "700",
+    color: "#1F2937",
+    marginBottom: 20,
+  },
+
   card: {
-    backgroundColor: "#ffffff",
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 24,
-    borderWidth: 1,
-    borderColor: "#e2e8f0",
+    backgroundColor: "#FFFFFF",
+    borderRadius: 16,
+    padding: 18,
+    marginBottom: 16,
+    elevation: 2,
+    shadowColor: "#000",
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
   },
-  formTitle: { fontSize: 18, fontWeight: "700", color: "#0f172a", marginBottom: 14 },
-  label: { fontSize: 13, fontWeight: "600", color: "#475569", marginBottom: 6, marginTop: 8 },
-  input: {
-    backgroundColor: "#f8fafc",
-    borderWidth: 1,
-    borderColor: "#cbd5e1",
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+
+  sectionTitle: {
+    fontSize: 19,
+    fontWeight: "700",
+    color: "#111827",
+    marginBottom: 15,
+  },
+
+  label: {
     fontSize: 14,
-    color: "#0f172a",
+    fontWeight: "600",
+    color: "#374151",
+    marginTop: 10,
+    marginBottom: 7,
   },
-  multilineInput: { minHeight: 70, textAlignVertical: "top" },
-  medicineSectionHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginTop: 8,
-    marginBottom: 6,
+
+  infoText: {
+    fontSize: 16,
+    color: "#1F2937",
+    paddingBottom: 5,
   },
-  addMedBtn: {
-    backgroundColor: "#eff6ff",
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderRadius: 6,
+
+  input: {
+    backgroundColor: "#F9FAFB",
     borderWidth: 1,
-    borderColor: "#bfdbfe",
-  },
-  addMedBtnText: { fontSize: 12, fontWeight: "600", color: "#2563eb" },
-  medRowBox: { backgroundColor: "#f1f5f9", borderRadius: 8, padding: 10, marginBottom: 10 },
-  medRowHeader: { flexDirection: "row", justifyContent: "space-between", marginBottom: 6 },
-  medIndexText: { fontSize: 12, fontWeight: "700", color: "#64748b" },
-  removeText: { fontSize: 12, fontWeight: "600", color: "#ef4444" },
-  inputTwoCol: { flexDirection: "row", gap: 8, marginTop: 8 },
-  submitButton: {
-    backgroundColor: "#2563eb",
-    borderRadius: 8,
+    borderColor: "#D1D5DB",
+    borderRadius: 10,
+    paddingHorizontal: 14,
     paddingVertical: 12,
-    alignItems: "center",
-    marginTop: 18,
-    cursor: "pointer" as any,
+    fontSize: 15,
+    color: "#111827",
   },
-  btnDisabled: { opacity: 0.6 },
-  submitButtonText: { color: "#ffffff", fontSize: 15, fontWeight: "600" },
-  sectionHeader: { fontSize: 18, fontWeight: "700", color: "#0f172a", marginBottom: 12 },
-  centerBox: { padding: 24, alignItems: "center" },
-  stateText: { fontSize: 13, color: "#64748b", marginTop: 8 },
-  emptyBox: { padding: 24, backgroundColor: "#ffffff", borderRadius: 12, alignItems: "center" },
-  emptyText: { color: "#94a3b8", fontSize: 14 },
-  historyCard: {
-    backgroundColor: "#ffffff",
+
+  textArea: {
+    minHeight: 100,
+    textAlignVertical: "top",
+  },
+
+  button: {
+    backgroundColor: "#2563EB",
     borderRadius: 12,
-    padding: 14,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: "#e2e8f0",
-  },
-  cardHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
+    paddingVertical: 15,
     alignItems: "center",
-    marginBottom: 6,
+    marginTop: 5,
   },
-  patientName: { fontSize: 15, fontWeight: "700", color: "#0f172a" },
-  dateText: { fontSize: 12, color: "#64748b" },
-  diagnosisText: { fontSize: 13, color: "#334155", marginBottom: 8 },
-  bold: { fontWeight: "700" },
-  medChipsContainer: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 8 },
-  medChip: { backgroundColor: "#e0e7ff", borderRadius: 6, paddingVertical: 4, paddingHorizontal: 8 },
-  medChipName: { fontSize: 12, fontWeight: "600", color: "#3730a3" },
-  medChipDetails: { fontSize: 11, color: "#4338ca" },
-  notesText: { fontSize: 12, color: "#64748b", fontStyle: "italic" },
+
+  buttonDisabled: {
+    opacity: 0.6,
+  },
+
+  buttonText: {
+    color: "#FFFFFF",
+    fontSize: 16,
+    fontWeight: "700",
+  },
 });

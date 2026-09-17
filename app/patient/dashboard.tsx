@@ -3,12 +3,12 @@ import { useApp } from "@/Context/AppContext";
 import { router, useLocalSearchParams } from "expo-router";
 import React from "react";
 import {
-  Pressable,
-  SafeAreaView,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
+    Pressable,
+    SafeAreaView,
+    ScrollView,
+    StyleSheet,
+    Text,
+    View,
 } from "react-native";
 
 import { Appointment } from "../../data/mockData";
